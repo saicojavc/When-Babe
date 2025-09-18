@@ -25,7 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.Delete // Added
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -61,8 +61,10 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
 
+// Updated UserEventData to include eventId
 data class UserEventData(
     val userId: String,
+    val eventId: String, // Unique ID for each event
     val eventName: String?,
     val eventDate: String?
 )
@@ -89,23 +91,28 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
     var userEventList by remember { mutableStateOf(listOf<UserEventData>()) }
     var eventToEdit by remember { mutableStateOf<UserEventData?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var userToDelete by remember { mutableStateOf<UserEventData?>(null) }
+    var eventToDelete by remember { mutableStateOf<UserEventData?>(null) } // Changed from userToDelete to eventToDelete for clarity
 
     DisposableEffect(key1 = database) {
         val usersRef = database.getReference("users")
         val valueEventListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val tempList = mutableListOf<UserEventData>()
-                snapshot.children.forEach { userSnapshot ->
+                snapshot.children.forEach { userSnapshot -> // Iterates through each userId
                     val currentLoopUserId = userSnapshot.key ?: ""
-                    val eventDetailsSnapshot = userSnapshot.child("eventDetails")
-                    val eventName = eventDetailsSnapshot.child("name").getValue(String::class.java)
-                    val eventDate = eventDetailsSnapshot.child("date").getValue(String::class.java)
                     if (currentLoopUserId.isNotEmpty()) {
-                        tempList.add(UserEventData(currentLoopUserId, eventName, eventDate))
+                        val eventsDetailsNode = userSnapshot.child("eventDetails")
+                        eventsDetailsNode.children.forEach { eventSnapshot -> // Iterates through each event under eventDetails
+                            val eventId = eventSnapshot.key ?: ""
+                            val eventName = eventSnapshot.child("name").getValue(String::class.java)
+                            val eventDate = eventSnapshot.child("date").getValue(String::class.java)
+                            if (eventId.isNotEmpty()) {
+                                tempList.add(UserEventData(currentLoopUserId, eventId, eventName, eventDate))
+                            }
+                        }
                     }
                 }
-                userEventList = tempList
+                userEventList = tempList.sortedByDescending { safeParseISODate(it.eventDate) ?: LocalDate.MIN }
                 Log.d("MainScreen", "User event list updated: ${userEventList.size} items")
             }
             override fun onCancelled(error: DatabaseError) {
@@ -121,6 +128,7 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
 
     if (showDialog) {
         CustomAlertDialog(
+            initialEventId = eventToEdit?.eventId,
             initialName = eventToEdit?.eventName,
             initialDateString = eventToEdit?.eventDate,
             onDismiss = {
@@ -129,17 +137,27 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
             },
             onAccept = { name, date ->
                 showDialog = false
-                if (userId != null) { // Save/update the event for the current user
-                    val formattedDate = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
-                    val eventInfo = mapOf("name" to name, "date" to formattedDate)
-                    database.getReference("users").child(userId).child("eventDetails")
-                        .setValue(eventInfo)
-                        .addOnSuccessListener {
-                            Log.d("MainScreen", "Event details saved for user: $userId")
-                        }
-                        .addOnFailureListener { e ->
-                            Log.e("MainScreen", "Failed to save event for user: $userId", e)
-                        }
+                if (userId != null) {
+                    val eventInfo = mapOf("name" to name, "date" to date.format(DateTimeFormatter.ISO_LOCAL_DATE))
+                    val eventDetailsRef = database.getReference("users").child(userId).child("eventDetails")
+
+                    if (eventToEdit == null || eventToEdit?.eventId.isNullOrEmpty()) { // Create new event
+                        eventDetailsRef.push().setValue(eventInfo)
+                            .addOnSuccessListener {
+                                Log.d("MainScreen", "New event saved for user: $userId")
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("MainScreen", "Failed to save new event for user: $userId", e)
+                            }
+                    } else { // Update existing event
+                        eventDetailsRef.child(eventToEdit!!.eventId).setValue(eventInfo)
+                            .addOnSuccessListener {
+                                Log.d("MainScreen", "Event updated for user: $userId, eventId: ${eventToEdit!!.eventId}")
+                            }
+                            .addOnFailureListener { e ->
+                                Log.e("MainScreen", "Failed to update event for user: $userId, eventId: ${eventToEdit!!.eventId}", e)
+                            }
+                    }
                 } else {
                     Log.w("MainScreen", "Cannot save event: current userId is null")
                 }
@@ -148,24 +166,27 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
         )
     }
 
-    if (showDeleteDialog && userToDelete != null) {
-        ConfirmDeleteDialog(
-            userName = userToDelete?.userId?.take(8), // Show part of the ID or name if available
+    if (showDeleteDialog && eventToDelete != null) {
+        ConfirmDeleteDialog( // Pass eventName for a more specific message
+            eventName = eventToDelete?.eventName,
             onConfirm = {
-                val userIdToDelete = userToDelete!!.userId
-                database.getReference("users").child(userIdToDelete).removeValue()
-                    .addOnSuccessListener {
-                        Log.d("MainScreen", "User data deleted for user: $userIdToDelete")
-                    }
-                    .addOnFailureListener { e ->
-                        Log.e("MainScreen", "Failed to delete data for user: $userIdToDelete", e)
-                    }
+                if (eventToDelete != null) {
+                    database.getReference("users").child(eventToDelete!!.userId)
+                        .child("eventDetails").child(eventToDelete!!.eventId)
+                        .removeValue()
+                        .addOnSuccessListener {
+                            Log.d("MainScreen", "Event deleted: userId=${eventToDelete!!.userId}, eventId=${eventToDelete!!.eventId}")
+                        }
+                        .addOnFailureListener { e ->
+                            Log.e("MainScreen", "Failed to delete event: userId=${eventToDelete!!.userId}, eventId=${eventToDelete!!.eventId}", e)
+                        }
+                }
                 showDeleteDialog = false
-                userToDelete = null
+                eventToDelete = null
             },
             onDismiss = {
                 showDeleteDialog = false
-                userToDelete = null
+                eventToDelete = null
             }
         )
     }
@@ -202,17 +223,17 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                 Text("Cargando eventos o no hay eventos...", modifier = Modifier.padding(8.dp))
             } else {
                 LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
-                    items(userEventList) { eventData ->
+                    items(userEventList, key = { it.userId + it.eventId }) { eventData ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                                 .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(4.dp))
-                                .padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 4.dp), // Adjusted padding
+                                .padding(start = 8.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Usuario: ${eventData.userId.take(8)}...", style = MaterialTheme.typography.titleMedium)
+                                Text("Usuario: ${eventData.userId.take(8)}...", style = MaterialTheme.typography.titleSmall)
                                 eventData.eventName?.let { Text("Evento: $it", style = MaterialTheme.typography.bodyMedium) }
                                 eventData.eventDate?.let { dateStr ->
                                     val parsedDate = safeParseISODate(dateStr)
@@ -229,13 +250,13 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                                         eventToEdit = eventData
                                         showDialog = true
                                     }) {
-                                        Icon(Icons.Filled.Edit, contentDescription = "Editar Evento")
+                                        Icon(Icons.Filled.Edit, contentDescription = "Editar este Evento")
                                     }
                                     IconButton(onClick = {
-                                        userToDelete = eventData
+                                        eventToDelete = eventData // Set the specific event to delete
                                         showDeleteDialog = true
                                     }) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "Eliminar Usuario", tint = MaterialTheme.colorScheme.error)
+                                        Icon(Icons.Filled.Delete, contentDescription = "Eliminar este Evento", tint = MaterialTheme.colorScheme.error) // Updated contentDescription
                                     }
                                 }
                             }
@@ -250,6 +271,7 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun CustomAlertDialog(
+    initialEventId: String? = null,
     initialName: String? = null,
     initialDateString: String? = null,
     onDismiss: () -> Unit,
@@ -262,7 +284,7 @@ fun CustomAlertDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initialName != null) "Editar Evento" else "Información Personal", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
+        title = { Text(if (initialEventId != null) "Editar Evento" else "Información Personal", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -302,14 +324,17 @@ fun CustomAlertDialog(
 
 @Composable
 fun ConfirmDeleteDialog(
-    userName: String?, // Or any other identifier for the user
+    eventName: String?, // Changed from userName to eventName for clarity
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Confirmar Eliminación") },
-        text = { Text("¿Estás seguro de que quieres eliminar todos los datos del usuario ${userName ?: "seleccionado"}? Esta acción no se puede deshacer.") },
+        text = {
+            val eventDescription = if (!eventName.isNullOrBlank()) "'${eventName}'" else "este evento"
+            Text("¿Estás seguro de que quieres eliminar ${eventDescription}? Esta acción no se puede deshacer.")
+        },
         confirmButton = {
             Button(
                 onClick = onConfirm,
@@ -364,7 +389,7 @@ fun CalendarComponent(
         Spacer(modifier = Modifier.height(8.dp))
         val firstDayOfMonth = currentMonth.withDayOfMonth(1)
         val lastDayOfMonth = currentMonth.withDayOfMonth(currentMonth.lengthOfMonth())
-        val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7 // Sunday as 0
+        val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7
         val totalDays = lastDayOfMonth.dayOfMonth
         LazyVerticalGrid(columns = GridCells.Fixed(7), modifier = Modifier.height(200.dp)) {
             items(firstDayOfWeek) { Spacer(modifier = Modifier.size(40.dp)) }
@@ -397,4 +422,3 @@ fun CalendarComponent(
         }
     }
 }
-
