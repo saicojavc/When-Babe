@@ -61,7 +61,9 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.util.Locale
 
-// Updated UserEventData to include eventId
+// Admin User ID
+private const val ADMIN_USER_ID = "0be2f871-aa42-4258-81b4-383dd7bf1860"
+
 data class UserEventData(
     val userId: String,
     val eventId: String, // Unique ID for each event
@@ -91,18 +93,18 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
     var userEventList by remember { mutableStateOf(listOf<UserEventData>()) }
     var eventToEdit by remember { mutableStateOf<UserEventData?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var eventToDelete by remember { mutableStateOf<UserEventData?>(null) } // Changed from userToDelete to eventToDelete for clarity
+    var eventToDelete by remember { mutableStateOf<UserEventData?>(null) }
 
     DisposableEffect(key1 = database) {
         val usersRef = database.getReference("users")
         val valueEventListener = object : ValueEventListener {
             override fun onDataChange(snapshot: DataSnapshot) {
                 val tempList = mutableListOf<UserEventData>()
-                snapshot.children.forEach { userSnapshot -> // Iterates through each userId
+                snapshot.children.forEach { userSnapshot ->
                     val currentLoopUserId = userSnapshot.key ?: ""
                     if (currentLoopUserId.isNotEmpty()) {
                         val eventsDetailsNode = userSnapshot.child("eventDetails")
-                        eventsDetailsNode.children.forEach { eventSnapshot -> // Iterates through each event under eventDetails
+                        eventsDetailsNode.children.forEach { eventSnapshot ->
                             val eventId = eventSnapshot.key ?: ""
                             val eventName = eventSnapshot.child("name").getValue(String::class.java)
                             val eventDate = eventSnapshot.child("date").getValue(String::class.java)
@@ -150,16 +152,15 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                                 Log.e("MainScreen", "Failed to save new event for user: $userId", e)
                             }
                     } else { // Update existing event
-                        eventDetailsRef.child(eventToEdit!!.eventId).setValue(eventInfo)
+                        val eventIdToUpdate = eventToEdit!!.eventId
+                        eventDetailsRef.child(eventIdToUpdate).setValue(eventInfo)
                             .addOnSuccessListener {
-                                Log.d("MainScreen", "Event updated for user: $userId, eventId: ${eventToEdit!!.eventId}")
+                                Log.d("MainScreen", "Event updated for user: $userId, eventId: $eventIdToUpdate")
                             }
                             .addOnFailureListener { e ->
-                                Log.e("MainScreen", "Failed to update event for user: $userId, eventId: ${eventToEdit!!.eventId}", e)
+                                Log.e("MainScreen", "Failed to update event for user: $userId, eventId: $eventIdToUpdate", e)
                             }
                     }
-                } else {
-                    Log.w("MainScreen", "Cannot save event: current userId is null")
                 }
                 eventToEdit = null
             }
@@ -167,22 +168,31 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
     }
 
     if (showDeleteDialog && eventToDelete != null) {
-        ConfirmDeleteDialog( // Pass eventName for a more specific message
+        ConfirmDeleteDialog(
             eventName = eventToDelete?.eventName,
             onConfirm = {
-                if (eventToDelete != null) {
-                    database.getReference("users").child(eventToDelete!!.userId)
-                        .child("eventDetails").child(eventToDelete!!.eventId)
+                val eventDataToDelete = eventToDelete
+                if (eventDataToDelete != null) {
+                    val userIdForDelete = eventDataToDelete.userId
+                    val eventIdForDelete = eventDataToDelete.eventId
+
+                    database.getReference("users").child(userIdForDelete)
+                        .child("eventDetails").child(eventIdForDelete)
                         .removeValue()
                         .addOnSuccessListener {
-                            Log.d("MainScreen", "Event deleted: userId=${eventToDelete!!.userId}, eventId=${eventToDelete!!.eventId}")
+                            Log.d("MainScreen", "Event deleted: userId=${userIdForDelete}, eventId=${eventIdForDelete}")
+                            showDeleteDialog = false
+                            eventToDelete = null
                         }
                         .addOnFailureListener { e ->
-                            Log.e("MainScreen", "Failed to delete event: userId=${eventToDelete!!.userId}, eventId=${eventToDelete!!.eventId}", e)
+                            Log.e("MainScreen", "Failed to delete event: userId=${userIdForDelete}, eventId=${eventIdForDelete}", e)
+                            showDeleteDialog = false
+                            eventToDelete = null
                         }
+                } else {
+                    showDeleteDialog = false
+                    eventToDelete = null
                 }
-                showDeleteDialog = false
-                eventToDelete = null
             },
             onDismiss = {
                 showDeleteDialog = false
@@ -244,19 +254,23 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                                     }
                                 }
                             }
-                            if (eventData.userId == userId) {
-                                Row {
+                            Row {
+                                // Edit button: Only for the owner of the event
+                                if (eventData.userId == userId) {
                                     IconButton(onClick = {
                                         eventToEdit = eventData
                                         showDialog = true
                                     }) {
                                         Icon(Icons.Filled.Edit, contentDescription = "Editar este Evento")
                                     }
+                                }
+                                // Delete button: Only for the admin user, on any event
+                                if (userId == ADMIN_USER_ID) {
                                     IconButton(onClick = {
-                                        eventToDelete = eventData // Set the specific event to delete
+                                        eventToDelete = eventData
                                         showDeleteDialog = true
                                     }) {
-                                        Icon(Icons.Filled.Delete, contentDescription = "Eliminar este Evento", tint = MaterialTheme.colorScheme.error) // Updated contentDescription
+                                        Icon(Icons.Filled.Delete, contentDescription = "Eliminar este Evento", tint = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
@@ -324,7 +338,7 @@ fun CustomAlertDialog(
 
 @Composable
 fun ConfirmDeleteDialog(
-    eventName: String?, // Changed from userName to eventName for clarity
+    eventName: String?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
