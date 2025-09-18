@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "282601309211",
+    "firebase_url": "https://when-babe-default-rtdb.firebaseio.com",
+    "project_id": "when-babe",
+    "storage_bucket": "when-babe.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:282601309211:android:136045868bb70b88bca4be",
+        "android_client_info": {
+          "package_name": "com.saico.whenbabe"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGiIR3YwzhXHPFNZMngypt-_GTu92_8Fs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
