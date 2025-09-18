@@ -3,13 +3,17 @@ package com.saico.whenbabe.sceen
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -25,11 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -48,17 +55,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.lint.kotlin.metadata.Visibility
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.temporal.WeekFields
 import java.util.Locale
 
 // Admin User ID
@@ -94,6 +107,7 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
     var eventToEdit by remember { mutableStateOf<UserEventData?>(null) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var eventToDelete by remember { mutableStateOf<UserEventData?>(null) }
+    var showAllEventsCalendarDialog by remember { mutableStateOf(false) } // State for the new calendar dialog
 
     DisposableEffect(key1 = database) {
         val usersRef = database.getReference("users")
@@ -201,14 +215,30 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
         )
     }
 
+    if (showAllEventsCalendarDialog) {
+        AllEventsCalendarDialog(
+            allEvents = userEventList,
+            onDismiss = { showAllEventsCalendarDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.SpaceBetween // To push the icon to the right
             ) {
-                Text("Cuando llegas Alana")
+                Text(
+                    text = "Cuando llegas Alana",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f) // Text takes available space
+                )
+                IconButton(onClick = { showAllEventsCalendarDialog = true }) {
+                    Icon(imageVector = Icons.Filled.DateRange, contentDescription = "Ver calendario de todos los eventos")
+                }
             }
         },
         floatingActionButton = {
@@ -225,9 +255,8 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                 .padding(paddingValues)
                 .fillMaxWidth()
         ) {
-            Text("Tu User ID: ${userId?.take(8)}...", modifier = Modifier.padding(8.dp))
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Lista de Eventos de Usuarios:", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(8.dp))
+            Text("Lista de Apostadores:", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(8.dp))
 
             if (userEventList.isEmpty()) {
                 Text("Cargando eventos o no hay eventos...", modifier = Modifier.padding(8.dp))
@@ -243,8 +272,9 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Usuario: ${eventData.userId.take(8)}...", style = MaterialTheme.typography.titleSmall)
-                                eventData.eventName?.let { Text("Evento: $it", style = MaterialTheme.typography.bodyMedium) }
+                                eventData.eventName?.let { Text("Nombre: $it", style = MaterialTheme.typography.titleSmall) }
+                                Text("Id: ${eventData.userId.take(8)}...", style = MaterialTheme.typography.bodyMedium)
+                                 Text("Evento: Apuesta", style = MaterialTheme.typography.bodyMedium)
                                 eventData.eventDate?.let { dateStr ->
                                     val parsedDate = safeParseISODate(dateStr)
                                     if (parsedDate != null) {
@@ -255,7 +285,6 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                                 }
                             }
                             Row {
-                                // Edit button: Only for the owner of the event
                                 if (eventData.userId == userId) {
                                     IconButton(onClick = {
                                         eventToEdit = eventData
@@ -264,7 +293,6 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
                                         Icon(Icons.Filled.Edit, contentDescription = "Editar este Evento")
                                     }
                                 }
-                                // Delete button: Only for the admin user, on any event
                                 if (userId == ADMIN_USER_ID) {
                                     IconButton(onClick = {
                                         eventToDelete = eventData
@@ -281,6 +309,143 @@ fun MainScreen(userId: String?, database: FirebaseDatabase) {
         }
     }
 }
+
+
+@RequiresApi(Build.VERSION_CODES.O)
+@Composable
+fun AllEventsCalendarDialog(
+    allEvents: List<UserEventData>,
+    onDismiss: () -> Unit
+) {
+    var currentDisplayMonth by remember { mutableStateOf(YearMonth.now()) }
+    val today = LocalDate.now()
+
+    // Group events by date for quick lookup
+    val eventsByDate = remember(allEvents) {
+        allEvents.groupBy { safeParseISODate(it.eventDate) }
+            .filterKeys { it != null } // Remove events with unparseable dates
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.95f)
+                .padding(16.dp),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Calendario de Eventos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Month Navigation
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { currentDisplayMonth = currentDisplayMonth.minusMonths(1) }) {
+                        Icon(Icons.Default.ArrowBack, "Mes anterior")
+                    }
+                    Text(
+                        text = currentDisplayMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale("es"))),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    IconButton(onClick = { currentDisplayMonth = currentDisplayMonth.plusMonths(1) }) {
+                        Icon(Icons.Default.ArrowForward, "Mes siguiente")
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Days of the Week Header
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    val daysOfWeek = listOf("D", "L", "M", "X", "J", "V", "S") // Spanish initials
+                    daysOfWeek.forEach {
+                        Text(
+                            text = it,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Calendar Grid
+                val firstDayOfMonth = currentDisplayMonth.atDay(1)
+                val firstDayOfWeek = firstDayOfMonth.dayOfWeek.getDisplayName(java.time.format.TextStyle.SHORT, Locale.getDefault())
+                val daysInMonth = currentDisplayMonth.lengthOfMonth()
+                val weekFields = WeekFields.of(Locale.getDefault())
+                val firstDayOfMonthOffset = firstDayOfMonth.dayOfWeek.get(weekFields.dayOfWeek()) -1 // Adjust to make Sunday 0 or Monday 0 as per your week start
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(7),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    // Empty cells for the start of the month offset
+                    items(firstDayOfMonthOffset) {
+                        Box(modifier = Modifier.aspectRatio(1f)) // Maintain square cells
+                    }
+
+                    items(daysInMonth) { dayIndex ->
+                        val dayNumber = dayIndex + 1
+                        val date = currentDisplayMonth.atDay(dayNumber)
+                        val isCurrentDay = date == today
+                        val eventsOnThisDay = eventsByDate[date]
+
+                        Box(
+                            modifier = Modifier
+                                .aspectRatio(1f) // Maintain square cells
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        isCurrentDay -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                        !eventsOnThisDay.isNullOrEmpty() -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                                        else -> Color.Transparent
+                                    }
+                                )
+                                .border(
+                                    if (isCurrentDay) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else BorderStroke(0.dp, Color.Transparent),
+                                    CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = dayNumber.toString(),
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isCurrentDay || !eventsOnThisDay.isNullOrEmpty()) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isCurrentDay) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (!eventsOnThisDay.isNullOrEmpty()) {
+                                    Text(
+                                        text = "${eventsOnThisDay.size}", // Show event count
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary, // Or another distinct color
+                                        modifier = Modifier.padding(top = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Cerrar")
+                }
+            }
+        }
+    }
+}
+
 
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
@@ -396,17 +561,20 @@ fun CalendarComponent(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            listOf("D", "L", "M", "M", "J", "V", "S").forEach { day ->
+            listOf("D", "L", "M", "X", "J", "V", "S").forEach { day -> // Changed M to X for Wednesday
                 Text(text = day, modifier = Modifier.weight(1f), textAlign = TextAlign.Center, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
         val firstDayOfMonth = currentMonth.withDayOfMonth(1)
-        val lastDayOfMonth = currentMonth.withDayOfMonth(currentMonth.lengthOfMonth())
-        val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7
-        val totalDays = lastDayOfMonth.dayOfMonth
+        //val lastDayOfMonth = currentMonth.withDayOfMonth(currentMonth.lengthOfMonth())
+        //val firstDayOfWeek = firstDayOfMonth.dayOfWeek.value % 7 // Sunday as 0
+        val weekFields = WeekFields.of(Locale.getDefault())
+        val firstDayOfMonthOffset = firstDayOfMonth.dayOfWeek.get(weekFields.dayOfWeek()) -1
+
+        val totalDays = currentMonth.lengthOfMonth()
         LazyVerticalGrid(columns = GridCells.Fixed(7), modifier = Modifier.height(200.dp)) {
-            items(firstDayOfWeek) { Spacer(modifier = Modifier.size(40.dp)) }
+            items(firstDayOfMonthOffset) { Spacer(modifier = Modifier.size(40.dp).aspectRatio(1f)) }
             items(totalDays) { dayIndex ->
                 val day = dayIndex + 1
                 val date = currentMonth.withDayOfMonth(day)
@@ -419,7 +587,8 @@ fun CalendarComponent(
                             isToday -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
                             else -> Color.Transparent
                         }, CircleShape
-                    ), contentAlignment = Alignment.Center
+                    ).aspectRatio(1f),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = day.toString(),
